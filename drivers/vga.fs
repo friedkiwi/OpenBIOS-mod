@@ -43,9 +43,11 @@ fcode-version3
 
 " ioc!" (find-xt) value ioc!-xt
 " iow!" (find-xt) value iow!-xt
+" ioc@" (find-xt) value ioc@-xt
 
 : ioc! ioc!-xt execute ;
 : iow! iow!-xt execute ;
+: ioc@ ioc@-xt execute ;
 
 " le-w!" (find-xt) value le-w!-xt
 
@@ -141,6 +143,103 @@ defer vbe-iow!
 ;
 
 \
+\ Legacy VGA mode setting
+\
+\ Used for VGA-compatible cards that do not have the QEMU MMIO ioport
+\ BAR and Bochs VBE extensions (e.g. the S3 Trio on the PReP 40p
+\ machine).  Program a plain 8bpp packed-pixel graphics mode of the
+\ requested size through the standard VGA registers; the framebuffer
+\ is then accessed linearly through BAR0.
+\
+
+: vga-legacy-seq!  ( val idx -- )
+  h# 3c4 ioc!  h# 3c5 ioc!
+;
+
+: vga-legacy-crtc!  ( val idx -- )
+  h# 3d4 ioc!  h# 3d5 ioc!
+;
+
+: vga-legacy-gfx!  ( val idx -- )
+  h# 3ce ioc!  h# 3cf ioc!
+;
+
+: vga-legacy-attr!  ( val idx -- )
+  h# 3da ioc@ drop          \ reset attribute flip-flop
+  h# 3c0 ioc!  h# 3c0 ioc!
+;
+
+: vga-legacy-init  ( -- )
+  \ Only 8bpp is supported on this path
+  8 depth-bits-xt !
+  openbios-video-width line-bytes-xt !
+
+  h# 0 vga-addr ioc!                     \ blank screen
+  h# e3 h# 3c2 ioc!                      \ misc output: colour, RAM enable
+
+  h# 01 h# 00 vga-legacy-seq!            \ synchronous reset
+  h# 01 h# 01 vga-legacy-seq!            \ 8 dots/char, no clock divide
+  h# 0f h# 02 vga-legacy-seq!            \ enable all planes
+  h# 00 h# 03 vga-legacy-seq!
+  h# 0e h# 04 vga-legacy-seq!            \ ext mem, no odd/even, chain 4
+  h# 03 h# 00 vga-legacy-seq!            \ end reset
+
+  h# 00 h# 11 vga-legacy-crtc!           \ unlock CRTC 0-7
+  openbios-video-width 3 rshift 1-       \ ( hdisp-1 )
+  dup 4 + h# 00 vga-legacy-crtc!         \ horizontal total
+  dup h# 01 vga-legacy-crtc!             \ horizontal display end
+  dup h# 02 vga-legacy-crtc!             \ horizontal blank start
+  drop
+  h# 00 h# 03 vga-legacy-crtc!
+  h# 00 h# 04 vga-legacy-crtc!
+  h# 00 h# 05 vga-legacy-crtc!
+  openbios-video-height 1-               \ ( vdisp-1 )
+  dup h# ff and h# 06 vga-legacy-crtc!   \ vertical total (low)
+  dup h# ff and h# 12 vga-legacy-crtc!   \ vertical display end (low)
+  dup h# ff and h# 15 vga-legacy-crtc!   \ vertical blank start (low)
+  dup 8 rshift 1 and 1 lshift            \ overflow: vde bit 8
+  over 9 rshift 1 and 6 lshift or        \           vde bit 9
+  h# 10 or                               \           line compare bit 8
+  over 8 rshift 1 and or                 \           vtotal bit 8
+  over 9 rshift 1 and 5 lshift or        \           vtotal bit 9
+  h# 07 vga-legacy-crtc!
+  drop
+  h# 00 h# 08 vga-legacy-crtc!           \ preset row scan
+  h# 40 h# 09 vga-legacy-crtc!           \ max scan line 0, lc bit 9
+  h# 00 h# 0c vga-legacy-crtc!           \ start address
+  h# 00 h# 0d vga-legacy-crtc!
+  openbios-video-width 3 rshift
+  h# 13 vga-legacy-crtc!                 \ offset: line pitch / 8
+  h# 40 h# 14 vga-legacy-crtc!           \ doubleword mode
+  h# e3 h# 17 vga-legacy-crtc!           \ byte mode, no CGA addressing
+  h# ff h# 18 vga-legacy-crtc!           \ line compare (low)
+
+  h# 00 h# 00 vga-legacy-gfx!
+  h# 00 h# 01 vga-legacy-gfx!
+  h# 00 h# 02 vga-legacy-gfx!
+  h# 00 h# 03 vga-legacy-gfx!
+  h# 00 h# 04 vga-legacy-gfx!
+  h# 40 h# 05 vga-legacy-gfx!            \ 256 colour shift mode
+  h# 05 h# 06 vga-legacy-gfx!            \ graphics mode, A0000 64K
+  h# 0f h# 07 vga-legacy-gfx!
+  h# ff h# 08 vga-legacy-gfx!
+
+  h# 10 0 do
+    i i vga-legacy-attr!                 \ identity palette
+  loop
+  h# 41 h# 10 vga-legacy-attr!           \ graphics, 8-bit colour
+  h# 00 h# 11 vga-legacy-attr!
+  h# 0f h# 12 vga-legacy-attr!
+  h# 00 h# 13 vga-legacy-attr!           \ no pel panning
+  h# 00 h# 14 vga-legacy-attr!
+
+  h# ff h# 3c6 ioc!                      \ DAC pel mask
+
+  h# 3da ioc@ drop
+  h# 20 vga-addr ioc!                    \ enable video
+;
+
+\
 \ PCI BAR mapping
 \
 
@@ -231,6 +330,8 @@ defer mol-color!
 \
 
 : vbe-deinit ( -- )
+  \ Nothing to do for cards without the Bochs VBE extensions
+  mmio-addr -1 = if exit then
   \ Switching VBE on and off clears the framebuffer
   VBE_DISPI_DISABLED VBE_DISPI_INDEX_ENABLE vbe-iow!
   VBE_DISPI_ENABLED VBE_DISPI_INDEX_ENABLE vbe-iow!
@@ -245,7 +346,15 @@ headerless
 
 : qemu-vga-driver-install ( -- )
   mmio-addr -1 = if
-    map-mmio vbe-init
+    map-mmio
+    mmio-addr -1 = if
+      \ No QEMU MMIO BAR: plain VGA-compatible card, use the legacy
+      \ ioports and program the mode through the standard registers
+      ['] vga-legacy-ioc! to vga-ioc!
+      vga-legacy-init
+    else
+      vbe-init
+    then
   then
   fb-addr -1 = if
     map-fb fb-addr to frame-buffer-adr
