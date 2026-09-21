@@ -169,4 +169,7 @@ typedef struct residual_t {
 /* Build the residual data for the loaded PReP boot image */
 residual_t *residual_build(uint32_t load_base, uint32_t load_size);
 
+/* Lay out the PReP NVRAM header and name the boot device for AIX */
+void prep_nvram_setup(void);
+
 #endif /* PPC_RESIDUAL_H */

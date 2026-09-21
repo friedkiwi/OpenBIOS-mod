@@ -165,6 +165,7 @@ arch_init_program(void)
             /* PReP boot image: enter in real mode, as the PReP firmware
                does (MSR = 0; the image sets ME itself) */
             ctx->regs[REG_MSR] = MSR_ME;
+            prep_nvram_setup();
             printk("PReP residual data at %p: %u bytes, %u devices, "
                    "%u memory segments\n", res, res->length,
                    res->actual_devices, res->actual_segs);
