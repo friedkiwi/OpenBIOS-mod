@@ -2,8 +2,7 @@
  * context switching
  * 2003-10 by SONE Takeshi
  *
- * Residual data portions:
- *     Copyright (c) 2004-2005 Jocelyn Mayer
+ * PReP residual data: see residual.c
  */
 
 #include "config.h"
@@ -106,116 +105,12 @@ init_context(uint8_t *stack, uint32_t stack_size, int num_params)
 }
 
 
-/* Build PReP residual data */
-static void *
-residual_build(uint32_t memsize, uint32_t load_base, uint32_t load_size)
-{
-    residual_t *res;
-    const unsigned char model[] = "IBM PPS Model 6015\0";
-    int i;
-
-    res = malloc(sizeof(residual_t));
-    if (res == NULL) {
-        return NULL;
-    }
-
-    res->length = sizeof(residual_t);
-    res->version = 1;
-    res->revision = 0;
-    memcpy(res->vital.model, model, sizeof(model));
-    res->vital.version = 1;
-    res->vital.revision = 0;
-    res->vital.firmware = 0x1D1;
-    res->vital.NVRAM_size = 0x2000;
-    res->vital.nSIMMslots = 1;
-    res->vital.nISAslots = 0;
-    res->vital.nPCIslots = 0;
-    res->vital.nPCMCIAslots = 0;
-    res->vital.nMCAslots = 0;
-    res->vital.nEISAslots = 0;
-    res->vital.CPUHz = 200 * 1000 * 1000;
-    res->vital.busHz = 100 * 1000 * 1000;
-    res->vital.PCIHz = 33 * 1000 * 1000;
-    res->vital.TBdiv = 1000;
-    res->vital.wwidth = 32;
-    res->vital.page_size = 4096;
-    res->vital.ChBlocSize = 32;
-    res->vital.GrSize = 32;
-    res->vital.cache_size = 0;
-    res->vital.cache_type = 0; /* No cache */
-    res->vital.cache_assoc = 8; /* Same as 601 */
-    res->vital.cache_lnsize = 32;
-    res->vital.Icache_size = 0;
-    res->vital.Icache_assoc = 8;
-    res->vital.Icache_lnsize = 32;
-    res->vital.Dcache_size = 0;
-    res->vital.Dcache_assoc = 8;
-    res->vital.Dcache_lnsize = 32;
-    res->vital.TLB_size = 0;
-    res->vital.TLB_type = 0; /* None */
-    res->vital.TLB_assoc = 2;
-    res->vital.ITLB_size = 0;
-    res->vital.ITLB_assoc = 2;
-    res->vital.DTLB_size = 0;
-    res->vital.DTLB_assoc = 2;
-    res->vital.ext_vital = NULL;
-    res->nCPUs = 1;
-    res->CPUs[0].pvr = mfpvr();
-    res->CPUs[0].serial = 0;
-    res->CPUs[0].L2_size = 0;
-    res->CPUs[0].L2_assoc = 8;
-    /* Memory infos */
-    res->max_mem = memsize;
-    res->good_mem = memsize;
-    /* Memory mappings */
-    /* First segment: firmware */
-    res->maps[0].usage = 0x0007;
-    res->maps[0].base  = 0xfff00000;
-    res->maps[0].count = 0x00100000 >> 12;
-    i = 1;
-    /* Boot image */
-    load_size = (load_size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
-    res->maps[i].usage = 0x0008;
-    res->maps[i].base  = load_base >> 12;
-    res->maps[i].count = load_size >> 12;
-    i++;
-    /* Free memory */
-    res->maps[i].usage = 0x0010;
-    res->maps[i].base  = (load_base + load_size) >> 12;
-    res->maps[i].count = (memsize >> 12) - res->maps[i].base;
-    i++;
-    /* ISA IO region : 8MB */
-    res->maps[i].usage = 0x0040;
-    res->maps[i].base  = 0x80000000 >> 12;
-    res->maps[i].count = 0x00800000 >> 12;
-    i++;
-    /* System registers : 8MB */
-    res->maps[i].usage = 0x0200;
-    res->maps[i].base  = 0xBF800000 >> 12;
-    res->maps[i].count = 0x00800000 >> 12;
-    i++;
-    /* System ROM : 64 kB */
-    res->maps[i].usage = 0x2000;
-    res->maps[i].base  = 0xFFFF0000 >> 12;
-    res->maps[i].count = 0x00010000 >> 12;
-    i++;
-    res->nmaps = i;
-    /* Memory SIMMs */
-    res->nmems = 1;
-    res->memories[0].size = memsize;
-    /* Describe no devices */
-    res->ndevices = 0;
-
-    return res;
-}
-
 /* init-program */
 int
 arch_init_program(void)
 {
     volatile struct context *ctx = __context;
     ucell entry, param, loadbase, loadsize;
-    ofmem_t *ofmem = ofmem_arch_get_private();
     
     /* According to IEEE 1275, PPC bindings:
      *
@@ -253,14 +148,27 @@ arch_init_program(void)
 
     /* Residual data for PReP */
     if (!is_apple()) {
+        residual_t *res;
+
         fword("load-base");
         loadbase = POP();
-        fword("load-size");
+        feval("load-state >ls.file-size @");
         loadsize = POP();
 
-        ctx->regs[REG_R3] = (uintptr_t)residual_build((uint32_t)ofmem->ramsize,
-                                                      loadbase, loadsize);
+        /* The malloc arena is mapped 1:1, so this is a physical address */
+        res = residual_build(loadbase, loadsize);
+        ctx->regs[REG_R3] = (uintptr_t)res;
         ctx->regs[REG_R4] = loadbase;
+
+        feval("load-state >ls.file-type @");
+        if (POP() == 0x13 && res) {
+            /* PReP boot image: enter in real mode, as the PReP firmware
+               does (MSR = 0; the image sets ME itself) */
+            ctx->regs[REG_MSR] = MSR_ME;
+            printk("PReP residual data at %p: %u bytes, %u devices, "
+                   "%u memory segments\n", res, res->length,
+                   res->actual_devices, res->actual_segs);
+        }
     }
 
     return 0;

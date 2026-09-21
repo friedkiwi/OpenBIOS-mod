@@ -1222,6 +1222,13 @@ arch_of_init(void)
     bind_func("platform-boot", boot);
     bind_func("(arch-go)", arch_go);
 
+    if (!is_apple()) {
+        /* PReP firmware loads boot images at 4 MiB; AIX expects that */
+        push_str("400000");
+        push_str("load-base");
+        fword("$setenv");
+    }
+
     /* Allocate 8MB memory at load-base */
     fword("load-base");
     load_base = POP();

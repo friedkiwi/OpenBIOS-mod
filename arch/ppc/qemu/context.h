@@ -9,6 +9,8 @@ struct context {
     unsigned long pc;
     /* General registers */
     unsigned long regs[34];
+/* regs[0] is the MSR to enter the context with (0: firmware default) */
+#define REG_MSR 0
 #define REG_R3 3
 #define REG_R4 7
 #define REG_R5 8

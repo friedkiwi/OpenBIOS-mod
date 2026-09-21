@@ -148,12 +148,19 @@ __set_context:
 	PPC_LL  r30,  (STKOFF + 35 * ULONG_SIZE)(r4)
 	PPC_LL  r31,  (STKOFF + 36 * ULONG_SIZE)(r4)
 	
-	/* r4, r1 */
+	/* r1 (r4 is loaded last, below) */
 	PPC_LL  r1,  STKOFF(r4)
-	PPC_LL  r4,  (STKOFF + 9 * ULONG_SIZE)(r4)
 	
+	/* MSR for the new context: taken from the context if non-zero
+	   (PReP boot images run in real mode), else the firmware default */
+	PPC_LL  r0,  (STKOFF + 2 * ULONG_SIZE)(r4)
+	cmpwi   r0, 0
+	bne     1f
 	LOAD_REG_IMMEDIATE(r0, MSR_FP | MSR_ME | MSR_DR | MSR_IR)
+1:
+	PPC_LL  r4,  (STKOFF + 9 * ULONG_SIZE)(r4)
 	MTMSRD(r0)
+	isync
 	
 	blrl
 	

@@ -184,6 +184,7 @@
   <object source="qemu/start.S"/>
   <object source="qemu/switch.S"/>
   <object source="qemu/context.c"/>
+  <object source="qemu/residual.c" flags="-I$(SRCDIR)/arch/ppc"/>
   <object source="timebase.S"/>
   <external-object source="libqemu.a"/>
   <external-object source="libbootstrap.a"/>
