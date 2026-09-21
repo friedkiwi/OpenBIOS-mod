@@ -392,10 +392,10 @@ static void residual_add_pci(void)
             d.flags = 0x2800;
             d.pnp = pnp_isa_bridge; d.pnp_len = sizeof(pnp_isa_bridge);
             break;
-        case 0x0100:           /* SCSI controller: IBM001B, bootable */
-            if (vendor == 0x1000) {
-                d.dev_id = 0x244d001b;
-            }
+        case 0x0100:           /* SCSI controller: bootable.  AIX matches
+                                  PCI adapters on the vendor/device id
+                                  (its PdDv for the 53c810 is "00100100"),
+                                  so keep the config space id here */
             d.flags = 0x6380;
             break;
         case 0x0300:           /* display adapter: console output */
