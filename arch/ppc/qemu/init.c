@@ -691,6 +691,26 @@ id_cpu(void)
     }
 }
 
+/*
+ * Leave the ISA interrupt sources the way the PReP firmware does: the
+ * cascaded 8259s initialised (vectors 0x08/0x70, edge triggered) with
+ * every IRQ but the cascade masked, and the UARTs' interrupts disabled.
+ * After reset QEMU's 8259s have all IRQs unmasked and the 8254 channel 0
+ * is running, so a PReP boot image (e.g. the AIX bootstrap) that enables
+ * MSR[EE] before it has set up its interrupt controller would otherwise
+ * immediately take a spurious external interrupt.
+ */
+static void
+prep_quiesce_isa(void)
+{
+    outb(0x11, 0x20); outb(0x08, 0x21); outb(0x04, 0x21); outb(0x01, 0x21);
+    outb(0x11, 0xa0); outb(0x70, 0xa1); outb(0x02, 0xa1); outb(0x01, 0xa1);
+    outb(0xff, 0xa1);
+    outb(0xfb, 0x21);
+    outb(0x00, 0x3f9);
+    outb(0x00, 0x2f9);
+}
+
 static void arch_go(void);
 
 static void
@@ -707,6 +727,7 @@ arch_go(void)
     /* PReP machines expect a standard VGA console, so disable
        VBE extensions just before we transfer control */
     if (!is_apple()) {
+        prep_quiesce_isa();
         ph = dt_iterate_type(find_dev("/"), "display");
         if (ph != 0) {
             xt = find_package_method("vbe-deinit", ph);
