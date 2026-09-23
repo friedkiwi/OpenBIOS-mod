@@ -95,11 +95,20 @@ static void dump_drive(sd_private_t *drive)
 #define LSI_DSA           0x10
 #define LSI_ISTAT0        0x14
 #define LSI_DSP           0x2c
+#define LSI_DSPS          0x30
 #define LSI_SIST0         0x42
 #define LSI_SIST1         0x43
 
 #define LSI_ISTAT0_DIP    0x01
 #define LSI_ISTAT0_SIP    0x02
+
+/* Transfer control instruction modifiers */
+#define LSI_TC_COMPARE_PHASE  0x00020000
+#define LSI_TC_RELATIVE       0x00800000
+
+/* DSPS values reported by the SCRIPTS interrupt instructions */
+#define LSI_INT_OK        0x0
+#define LSI_INT_NO_DATA   0x1
 
 /* Indirection table */
 #define LSI_TABLE_OFFSET(x)  (((uintptr_t)&(x)) - ((uintptr_t)lsi->table))
@@ -129,56 +138,66 @@ init_scripts(lsi_private_t *lsi)
     lsi->scripts[0x4] = __cpu_to_le32(0x10000000 | (PHASE_CMD << 24));
     lsi->scripts[0x5] = __cpu_to_le32(LSI_TABLE_OFFSET(lsi->table->cmd_len));
 
-    /* 1.3 Data in */
-    lsi->scripts[0x6] = __cpu_to_le32(0x10000000 | (PHASE_DI << 24));
-    lsi->scripts[0x7] = __cpu_to_le32(LSI_TABLE_OFFSET(lsi->table->data_in_len));
+    /* 1.3 Skip the data in phase if the target went straight to status.
+       A target that terminates a command with CHECK CONDITION (an empty
+       CD-ROM drive answering READ CAPACITY, for example) never enters
+       DATA IN.  Without this test the following block move would raise a
+       phase mismatch, which leaves the initiator connected to the target
+       for ever and wedges the whole controller. */
+    lsi->scripts[0x6] = __cpu_to_le32(0x80000000 | (PHASE_DI << 24) |
+                                      LSI_TC_RELATIVE | LSI_TC_COMPARE_PHASE);
+    lsi->scripts[0x7] = __cpu_to_le32((0xa - 0x8) * sizeof(uint32_t));
 
-    /* 1.4 Status */
-    lsi->scripts[0x8] = __cpu_to_le32(0x10000000 | (PHASE_ST << 24));
-    lsi->scripts[0x9] = __cpu_to_le32(LSI_TABLE_OFFSET(lsi->table->status_len));
+    /* 1.4 Data in */
+    lsi->scripts[0x8] = __cpu_to_le32(0x10000000 | (PHASE_DI << 24));
+    lsi->scripts[0x9] = __cpu_to_le32(LSI_TABLE_OFFSET(lsi->table->data_in_len));
 
-    /* 1.5 Message in */
-    lsi->scripts[0xa] = __cpu_to_le32(0x10000000 | (PHASE_MI << 24));
-    lsi->scripts[0xb] = __cpu_to_le32(LSI_TABLE_OFFSET(lsi->table->msg_in_len));
-    
-    /* 1.6 Wait disconnect */
-    lsi->scripts[0xc] = __cpu_to_le32(0x48000000);
-    lsi->scripts[0xd] = __cpu_to_le32(LSI_TABLE_OFFSET(lsi->table->id));
+    /* 1.5 Status */
+    lsi->scripts[0xa] = __cpu_to_le32(0x10000000 | (PHASE_ST << 24));
+    lsi->scripts[0xb] = __cpu_to_le32(LSI_TABLE_OFFSET(lsi->table->status_len));
 
-    /* 1.7 Interrupt */
-    lsi->scripts[0xe] = __cpu_to_le32(0x98080000);
-    lsi->scripts[0xf] = 0x0;
+    /* 1.6 Message in */
+    lsi->scripts[0xc] = __cpu_to_le32(0x10000000 | (PHASE_MI << 24));
+    lsi->scripts[0xd] = __cpu_to_le32(LSI_TABLE_OFFSET(lsi->table->msg_in_len));
+
+    /* 1.7 Wait disconnect */
+    lsi->scripts[0xe] = __cpu_to_le32(0x48000000);
+    lsi->scripts[0xf] = __cpu_to_le32(LSI_TABLE_OFFSET(lsi->table->id));
+
+    /* 1.8 Interrupt */
+    lsi->scripts[0x10] = __cpu_to_le32(0x98080000);
+    lsi->scripts[0x11] = 0x0;
     
     
     /* 2 - TEST UNIT READY */
     
     /* 2.0 Select with ATN */
-    lsi->scripts[0x10] = __cpu_to_le32(0x47000000);
-    lsi->scripts[0x11] = __cpu_to_le32(LSI_TABLE_OFFSET(lsi->table->id));
+    lsi->scripts[0x12] = __cpu_to_le32(0x47000000);
+    lsi->scripts[0x13] = __cpu_to_le32(LSI_TABLE_OFFSET(lsi->table->id));
 
-    /* 2.1 Select LUN */    
-    lsi->scripts[0x12] = __cpu_to_le32(0x10000000 | (PHASE_MO << 24));
-    lsi->scripts[0x13] = __cpu_to_le32(LSI_TABLE_OFFSET(lsi->table->msg_out_len));
+    /* 2.1 Select LUN */
+    lsi->scripts[0x14] = __cpu_to_le32(0x10000000 | (PHASE_MO << 24));
+    lsi->scripts[0x15] = __cpu_to_le32(LSI_TABLE_OFFSET(lsi->table->msg_out_len));
 
     /* 2.2 Send command */
-    lsi->scripts[0x14] = __cpu_to_le32(0x10000000 | (PHASE_CMD << 24));
-    lsi->scripts[0x15] = __cpu_to_le32(LSI_TABLE_OFFSET(lsi->table->cmd_len));
+    lsi->scripts[0x16] = __cpu_to_le32(0x10000000 | (PHASE_CMD << 24));
+    lsi->scripts[0x17] = __cpu_to_le32(LSI_TABLE_OFFSET(lsi->table->cmd_len));
 
     /* 2.3 Status */
-    lsi->scripts[0x16] = __cpu_to_le32(0x10000000 | (PHASE_ST << 24));
-    lsi->scripts[0x17] = __cpu_to_le32(LSI_TABLE_OFFSET(lsi->table->status_len));
+    lsi->scripts[0x18] = __cpu_to_le32(0x10000000 | (PHASE_ST << 24));
+    lsi->scripts[0x19] = __cpu_to_le32(LSI_TABLE_OFFSET(lsi->table->status_len));
 
     /* 2.4 Message in */
-    lsi->scripts[0x18] = __cpu_to_le32(0x10000000 | (PHASE_MI << 24));
-    lsi->scripts[0x19] = __cpu_to_le32(LSI_TABLE_OFFSET(lsi->table->msg_in_len));
-    
+    lsi->scripts[0x1a] = __cpu_to_le32(0x10000000 | (PHASE_MI << 24));
+    lsi->scripts[0x1b] = __cpu_to_le32(LSI_TABLE_OFFSET(lsi->table->msg_in_len));
+
     /* 2.5 Wait disconnect */
-    lsi->scripts[0x1a] = __cpu_to_le32(0x48000000);
-    lsi->scripts[0x1b] = __cpu_to_le32(LSI_TABLE_OFFSET(lsi->table->id));
-    
+    lsi->scripts[0x1c] = __cpu_to_le32(0x48000000);
+    lsi->scripts[0x1d] = __cpu_to_le32(LSI_TABLE_OFFSET(lsi->table->id));
+
     /* 2.6 Interrupt */
-    lsi->scripts[0x1c] = __cpu_to_le32(0x98080000);
-    lsi->scripts[0x1d] = 0x0;
+    lsi->scripts[0x1e] = __cpu_to_le32(0x98080000);
+    lsi->scripts[0x1f] = 0x0;
     
     
     /* 3 - READ 10 */
@@ -195,33 +214,57 @@ init_scripts(lsi_private_t *lsi)
     lsi->scripts[0x24] = __cpu_to_le32(0x10000000 | (PHASE_CMD << 24));
     lsi->scripts[0x25] = __cpu_to_le32(LSI_TABLE_OFFSET(lsi->table->cmd_len));
 
-    /* 3.3 Message in */
-    lsi->scripts[0x26] = __cpu_to_le32(0x10000000 | (PHASE_MI << 24));
-    lsi->scripts[0x27] = __cpu_to_le32(LSI_TABLE_OFFSET(lsi->table->msg_in_len));
-        
-    /* 3.6 Interrupt */
-    lsi->scripts[0x28] = __cpu_to_le32(0x98080000);
-    lsi->scripts[0x29] = 0x0;
+    /* 3.3 A target that rejects the command goes straight to status
+       instead of disconnecting, so branch to the error epilogue at 0x36
+       rather than letting the message in block move mismatch. */
+    lsi->scripts[0x26] = __cpu_to_le32(0x80000000 | (PHASE_MI << 24) |
+                                       LSI_TC_RELATIVE | LSI_TC_COMPARE_PHASE);
+    lsi->scripts[0x27] = __cpu_to_le32((0x36 - 0x28) * sizeof(uint32_t));
 
-    /* 3.7 Wait reselect */    
-    lsi->scripts[0x2a] = __cpu_to_le32(0x50000000);
-    lsi->scripts[0x2b] = __cpu_to_le32(LSI_TABLE_OFFSET(lsi->table->id));
+    /* 3.4 Message in (disconnect) */
+    lsi->scripts[0x28] = __cpu_to_le32(0x10000000 | (PHASE_MI << 24));
+    lsi->scripts[0x29] = __cpu_to_le32(LSI_TABLE_OFFSET(lsi->table->msg_in_len));
 
-    /* 3.8 Message in */
-    lsi->scripts[0x2c] = __cpu_to_le32(0x10000000 | (PHASE_MI << 24));
-    lsi->scripts[0x2d] = __cpu_to_le32(LSI_TABLE_OFFSET(lsi->table->msg_in_len));
-        
-    /* 3.9 Data in */
-    lsi->scripts[0x2e] = __cpu_to_le32(0x10000000 | (PHASE_DI << 24));
-    lsi->scripts[0x2f] = __cpu_to_le32(LSI_TABLE_OFFSET(lsi->table->data_in_len));
-    
-    /* 3.10 Wait disconnect */
-    lsi->scripts[0x30] = __cpu_to_le32(0x48000000);
-    lsi->scripts[0x31] = __cpu_to_le32(LSI_TABLE_OFFSET(lsi->table->id));
+    /* 3.5 Interrupt */
+    lsi->scripts[0x2a] = __cpu_to_le32(0x98080000);
+    lsi->scripts[0x2b] = __cpu_to_le32(LSI_INT_OK);
 
-    /* 3.11 Interrupt */
-    lsi->scripts[0x32] = __cpu_to_le32(0x98080000);
-    lsi->scripts[0x33] = 0x0;
+    /* 3.6 Wait reselect */
+    lsi->scripts[0x2c] = __cpu_to_le32(0x50000000);
+    lsi->scripts[0x2d] = __cpu_to_le32(LSI_TABLE_OFFSET(lsi->table->id));
+
+    /* 3.7 Message in */
+    lsi->scripts[0x2e] = __cpu_to_le32(0x10000000 | (PHASE_MI << 24));
+    lsi->scripts[0x2f] = __cpu_to_le32(LSI_TABLE_OFFSET(lsi->table->msg_in_len));
+
+    /* 3.8 Data in */
+    lsi->scripts[0x30] = __cpu_to_le32(0x10000000 | (PHASE_DI << 24));
+    lsi->scripts[0x31] = __cpu_to_le32(LSI_TABLE_OFFSET(lsi->table->data_in_len));
+
+    /* 3.9 Wait disconnect */
+    lsi->scripts[0x32] = __cpu_to_le32(0x48000000);
+    lsi->scripts[0x33] = __cpu_to_le32(LSI_TABLE_OFFSET(lsi->table->id));
+
+    /* 3.10 Interrupt */
+    lsi->scripts[0x34] = __cpu_to_le32(0x98080000);
+    lsi->scripts[0x35] = __cpu_to_le32(LSI_INT_OK);
+
+    /* 3.11 Error epilogue: collect status and release the bus so that a
+       failed READ(10) does not leave the initiator connected. */
+    lsi->scripts[0x36] = __cpu_to_le32(0x10000000 | (PHASE_ST << 24));
+    lsi->scripts[0x37] = __cpu_to_le32(LSI_TABLE_OFFSET(lsi->table->status_len));
+
+    /* 3.12 Message in */
+    lsi->scripts[0x38] = __cpu_to_le32(0x10000000 | (PHASE_MI << 24));
+    lsi->scripts[0x39] = __cpu_to_le32(LSI_TABLE_OFFSET(lsi->table->msg_in_len));
+
+    /* 3.13 Wait disconnect */
+    lsi->scripts[0x3a] = __cpu_to_le32(0x48000000);
+    lsi->scripts[0x3b] = __cpu_to_le32(LSI_TABLE_OFFSET(lsi->table->id));
+
+    /* 3.14 Interrupt */
+    lsi->scripts[0x3c] = __cpu_to_le32(0x98080000);
+    lsi->scripts[0x3d] = __cpu_to_le32(LSI_INT_NO_DATA);
 }
 
 static void
@@ -274,6 +317,21 @@ lsi_interrupt_status(lsi_private_t *lsi)
     return 0;
 }
 
+/* SCSI status byte returned by the last command that ran a status phase */
+static unsigned int
+lsi_scsi_status(lsi_private_t *lsi)
+{
+    return lsi->buffer[LSI_TABLE_STATUS_OFFSET];
+}
+
+/* DSPS holds the argument of the SCRIPTS INT instruction that stopped us */
+static unsigned int
+lsi_script_result(lsi_private_t *lsi)
+{
+    return lsi->mmio[LSI_DSPS] | (lsi->mmio[LSI_DSPS + 1] << 8) |
+           (lsi->mmio[LSI_DSPS + 2] << 16) | (lsi->mmio[LSI_DSPS + 3] << 24);
+}
+
 static unsigned int
 inquiry(lsi_private_t *lsi, sd_private_t *sd)
 {
@@ -304,7 +362,7 @@ inquiry(lsi_private_t *lsi, sd_private_t *sd)
     lsi->mmio[LSI_DSP + 2] = (dsp >> 16) & 0xff;
     lsi->mmio[LSI_DSP + 3] = (dsp >> 24) & 0xff;
     
-    if (lsi_interrupt_status(lsi)) {
+    if (lsi_interrupt_status(lsi) || lsi_scsi_status(lsi)) {
         sd->present = 0;
         sd->media = -1;
         return 0;
@@ -313,6 +371,8 @@ inquiry(lsi_private_t *lsi, sd_private_t *sd)
     buffer = (uint8_t *)&lsi->buffer[LSI_TABLE_DATA_OFFSET];
     sd->present = 1;
     sd->media = buffer[0];
+    sd->bs = 0;
+    sd->sectors = 0;
 
     switch (sd->media) {
     case TYPE_DISK:
@@ -360,7 +420,7 @@ read_capacity(lsi_private_t *lsi, sd_private_t *sd)
     lsi->mmio[LSI_DSP + 2] = (dsp >> 16) & 0xff;
     lsi->mmio[LSI_DSP + 3] = (dsp >> 24) & 0xff;
 
-    if (lsi_interrupt_status(lsi)) {
+    if (lsi_interrupt_status(lsi) || lsi_scsi_status(lsi)) {
         sd->sectors = 0;
         sd->bs = 0;
         DPRINTF("read_capacity id %d failed\n", sd->id);
@@ -391,16 +451,16 @@ test_unit_ready(lsi_private_t *lsi, sd_private_t *sd)
     lsi->table->msg_in_len = __cpu_to_le32(0x1);
 
     lsi->table->id = __cpu_to_le32((sd->id << 16));
-    lsi->table->id_addr = __cpu_to_le32(&lsi->scripts_iova[0x12]);
+    lsi->table->id_addr = __cpu_to_le32(&lsi->scripts_iova[0x14]);
 
-    /* Write DSP to start DMA engine */    
-    uint32_t dsp = (uintptr_t)&lsi->scripts_iova[0x10];
+    /* Write DSP to start DMA engine */
+    uint32_t dsp = (uintptr_t)&lsi->scripts_iova[0x12];
     lsi->mmio[LSI_DSP] = dsp & 0xff;
     lsi->mmio[LSI_DSP + 1] = (dsp >> 8) & 0xff;
     lsi->mmio[LSI_DSP + 2] = (dsp >> 16) & 0xff;
     lsi->mmio[LSI_DSP + 3] = (dsp >> 24) & 0xff;
 
-    if (lsi_interrupt_status(lsi)) {
+    if (lsi_interrupt_status(lsi) || lsi_scsi_status(lsi)) {
         DPRINTF("test_unit_ready id %d failed\n", sd->id);
         return 0;
     }
@@ -481,13 +541,21 @@ ob_sd_read_sector(lsi_private_t *lsi, sd_private_t *sd, int offset)
         return 1;
     }
 
+    /* The target answered with status instead of disconnecting, so the
+       command failed and there is no data to collect. */
+    if (lsi_script_result(lsi) == LSI_INT_NO_DATA) {
+        DPRINTF("ob_sd_read_sector id %d failed, status %d\n", sd->id,
+                lsi_scsi_status(lsi));
+        return 1;
+    }
+
     // Reslect and data transfer
     lsi->table->msg_in_len = __cpu_to_le32(0x1);
 
     lsi->table->data_in_len = __cpu_to_le32(sd->bs);
-    
-    /* Write DSP to start DMA engine */    
-    dsp = (uintptr_t)&lsi->scripts_iova[0x2a];
+
+    /* Write DSP to start DMA engine */
+    dsp = (uintptr_t)&lsi->scripts_iova[0x2c];
     lsi->mmio[LSI_DSP] = dsp & 0xff;
     lsi->mmio[LSI_DSP + 1] = (dsp >> 8) & 0xff;
     lsi->mmio[LSI_DSP + 2] = (dsp >> 16) & 0xff;
