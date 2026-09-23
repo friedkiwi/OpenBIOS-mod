@@ -258,6 +258,12 @@ static const pci_dev_t vga_devices[] = {
         NULL, NULL,
     },
     {
+        PCI_VENDOR_ID_S3, PCI_DEVICE_ID_S3_VISION864,
+        NULL, "S3,Vision864", "S3 Vision864", "VGA\0",
+        0, 0, 0,
+        NULL, NULL,
+    },
+    {
         0xFFFF, 0xFFFF,
         NULL, NULL, NULL, NULL,
         -1, -1, -1,

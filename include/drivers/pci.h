@@ -238,6 +238,7 @@ extern const pci_arch_t *arch;
 
 #define PCI_VENDOR_ID_S3                 0x5333
 #define PCI_DEVICE_ID_S3_TRIO64V2        0x8811
+#define PCI_DEVICE_ID_S3_VISION864       0x88c0
 
 #define PCI_VENDOR_ID_REDHAT_QUMRANET    0x1af4
 #define PCI_DEVICE_ID_VIRTIO_NET         0x1000
